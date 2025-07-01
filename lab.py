@@ -140,7 +140,7 @@ def display_location_inventory(location):
     
     with col2:
         filter_status = st.selectbox(f"Filter by status", 
-                                    ["All", "Available", "Deployed"],
+                                    ["All", "Available", "Deployed", "Loaned"],
                                     key=f"filter_{location}")
     
     # Get unique owners for this location
@@ -177,11 +177,12 @@ def display_location_inventory(location):
         ]
     
     # Display metrics for this location
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     total_assets = len(location_inventory)
     available_assets = len([a for a in location_inventory if a['status'] == "Available"])
     deployed_assets = len([a for a in location_inventory if a['status'] == "Deployed"])
+    loaned_assets = len([a for a in location_inventory if a['status'] == "Loaned"])
     
     with col1:
         st.metric("Total Assets", total_assets)
@@ -190,7 +191,10 @@ def display_location_inventory(location):
     with col3:
         st.metric("Deployed", deployed_assets)
     with col4:
-        st.metric("Utilization", f"{(deployed_assets/total_assets*100):.1f}%" if total_assets > 0 else "0%")
+        st.metric("Loaned", loaned_assets)
+    with col5:
+        in_use = deployed_assets + loaned_assets
+        st.metric("Utilization", f"{(in_use/total_assets*100):.1f}%" if total_assets > 0 else "0%")
     
     st.divider()
     
@@ -230,6 +234,14 @@ def display_location_inventory(location):
                         st.write(f"Row: {asset['deployment_info']['row']}")
                         st.write(f"Position: {asset['deployment_info']['position']}")
                         st.write(f"Deployed: {asset['deployment_info']['deployment_date']}")
+                    elif asset['status'] == "Loaned":
+                        st.write("**Loan Info:**")
+                        loan_info = asset.get('loan_info', {})
+                        st.write(f"Loaned to: {loan_info.get('loaned_to', 'N/A')}")
+                        st.write(f"Purpose: {loan_info.get('purpose', 'N/A')}")
+                        st.write(f"Loan date: {loan_info.get('loan_date', 'N/A')}")
+                        if loan_info.get('expected_return'):
+                            st.write(f"Expected return: {loan_info.get('expected_return')}")
                     
                     # Action buttons
                     if st.button(f"Edit", key=f"edit_{location}_{asset['asset_id']}"):
@@ -279,10 +291,12 @@ def display_location_inventory(location):
                             index=LOCATIONS.index(asset['location']),
                             key=f"loc_{asset['asset_id']}"
                         )
+                        status_options = ["Available", "Deployed", "Loaned"]
+                        current_status_index = status_options.index(asset['status']) if asset['status'] in status_options else 0
                         new_status = st.selectbox(
                             "Status", 
-                            ["Available", "Deployed"],
-                            index=0 if asset['status'] == "Available" else 1,
+                            status_options,
+                            index=current_status_index,
                             key=f"status_{asset['asset_id']}"
                         )
                         new_notes = st.text_area(
@@ -333,6 +347,17 @@ def display_location_inventory(location):
                         with col3:
                             position = st.text_input("Position", value=asset.get('deployment_info', {}).get('position', ''), key=f"pos_{asset['asset_id']}")
                     
+                    # Loan information if loaned
+                    elif new_status == "Loaned":
+                        st.write("**Loan Information:**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            loaned_to = st.text_input("Loaned To", value=asset.get('loan_info', {}).get('loaned_to', ''), key=f"loaned_to_{asset['asset_id']}")
+                            purpose = st.text_input("Purpose", value=asset.get('loan_info', {}).get('purpose', ''), key=f"purpose_{asset['asset_id']}")
+                        with col2:
+                            loan_date = st.date_input("Loan Date", value=datetime.now(), key=f"loan_date_{asset['asset_id']}")
+                            expected_return = st.date_input("Expected Return Date (Optional)", value=None, key=f"expected_return_{asset['asset_id']}")
+                    
                     # Save and Cancel buttons
                     col1, col2 = st.columns(2)
                     with col1:
@@ -354,8 +379,18 @@ def display_location_inventory(location):
                                     "position": position,
                                     "deployment_date": asset.get('deployment_info', {}).get('deployment_date', datetime.now().strftime("%Y-%m-%d %H:%M"))
                                 }
+                                updated_data["loan_info"] = {}
+                            elif new_status == "Loaned":
+                                updated_data["loan_info"] = {
+                                    "loaned_to": loaned_to,
+                                    "purpose": purpose,
+                                    "loan_date": loan_date.strftime("%Y-%m-%d"),
+                                    "expected_return": expected_return.strftime("%Y-%m-%d") if expected_return else ""
+                                }
+                                updated_data["deployment_info"] = {}
                             else:
                                 updated_data["deployment_info"] = {}
+                                updated_data["loan_info"] = {}
                             
                             update_asset(asset['asset_id'], updated_data)
                             st.session_state[f"edit_mode_{asset['asset_id']}"] = False
@@ -399,7 +434,7 @@ with main_tab2:
     with col2:
         location = st.selectbox("Location *", LOCATIONS)
         category = st.selectbox("Asset Category *", list(ASSET_CATEGORIES.keys()))
-        status = st.selectbox("Initial Status *", ["Available", "Deployed"])
+        status = st.selectbox("Initial Status *", ["Available", "Deployed", "Loaned"])
     
     # Specifications
     st.subheader("Specifications")
@@ -420,6 +455,8 @@ with main_tab2:
     
     # Deployment information if deployed
     deployment_info = {}
+    loan_info = {}
+    
     if status == "Deployed":
         st.subheader("Deployment Information")
         col1, col2, col3 = st.columns(3)
@@ -430,6 +467,17 @@ with main_tab2:
         with col3:
             deployment_info["position"] = st.text_input("Position (e.g., U1-U4)")
         deployment_info["deployment_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    elif status == "Loaned":
+        st.subheader("Loan Information")
+        col1, col2 = st.columns(2)
+        with col1:
+            loan_info["loaned_to"] = st.text_input("Loaned To *")
+            loan_info["purpose"] = st.text_input("Purpose *")
+        with col2:
+            loan_info["loan_date"] = st.date_input("Loan Date").strftime("%Y-%m-%d")
+            expected_return = st.date_input("Expected Return Date (Optional)", value=None)
+            if expected_return:
+                loan_info["expected_return"] = expected_return.strftime("%Y-%m-%d")
     
     # Notes
     notes = st.text_area("Additional Notes", height=100)
@@ -441,7 +489,15 @@ with main_tab2:
             specifications.get(field) for field in ASSET_CATEGORIES[category]["required"]
         )
         
-        if name and required_specs_filled and (status == "Available" or all(deployment_info.values())):
+        valid_submission = False
+        if status == "Available":
+            valid_submission = name and required_specs_filled
+        elif status == "Deployed":
+            valid_submission = name and required_specs_filled and all(deployment_info.values())
+        elif status == "Loaned":
+            valid_submission = name and required_specs_filled and loan_info.get("loaned_to") and loan_info.get("purpose")
+        
+        if valid_submission:
             new_asset = {
                 "asset_id": generate_asset_id(),
                 "name": name,
@@ -451,6 +507,7 @@ with main_tab2:
                 "status": status,
                 "specifications": specifications,
                 "deployment_info": deployment_info,
+                "loan_info": loan_info,
                 "notes": notes,
                 "date_added": datetime.now().strftime("%Y-%m-%d %H:%M")
             }
@@ -477,6 +534,11 @@ with main_tab2:
                     missing_fields.append(field)
             if status == "Deployed" and not all(deployment_info.values()):
                 missing_fields.append("Deployment Information")
+            if status == "Loaned":
+                if not loan_info.get("loaned_to"):
+                    missing_fields.append("Loaned To")
+                if not loan_info.get("purpose"):
+                    missing_fields.append("Purpose")
             
             st.error(f"Please fill in all required fields: {', '.join(missing_fields)}")
 
@@ -487,11 +549,13 @@ with main_tab3:
     if st.session_state.inventory:
         # Global summary metrics
         st.subheader("Overall Statistics")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         total_assets = len(st.session_state.inventory)
         available_assets = len([a for a in st.session_state.inventory if a['status'] == "Available"])
         deployed_assets = len([a for a in st.session_state.inventory if a['status'] == "Deployed"])
+        loaned_assets = len([a for a in st.session_state.inventory if a['status'] == "Loaned"])
+        in_use_assets = deployed_assets + loaned_assets
         
         with col1:
             st.metric("Total Assets (All Locations)", total_assets)
@@ -500,7 +564,9 @@ with main_tab3:
         with col3:
             st.metric("Deployed", deployed_assets)
         with col4:
-            st.metric("Global Utilization", f"{(deployed_assets/total_assets*100):.1f}%" if total_assets > 0 else "0%")
+            st.metric("Loaned", loaned_assets)
+        with col5:
+            st.metric("Global Utilization", f"{(in_use_assets/total_assets*100):.1f}%" if total_assets > 0 else "0%")
         
         st.divider()
         
@@ -508,11 +574,14 @@ with main_tab3:
         st.subheader("Assets by Location")
         location_counts = {}
         location_deployed = {}
+        location_loaned = {}
         for asset in st.session_state.inventory:
             loc = asset['location']
             location_counts[loc] = location_counts.get(loc, 0) + 1
             if asset['status'] == "Deployed":
                 location_deployed[loc] = location_deployed.get(loc, 0) + 1
+            elif asset['status'] == "Loaned":
+                location_loaned[loc] = location_loaned.get(loc, 0) + 1
         
         # Create location summary
         col1, col2 = st.columns(2)
@@ -523,20 +592,24 @@ with main_tab3:
                     {
                         'Location': loc,
                         'Total': location_counts.get(loc, 0),
+                        'Available': location_counts.get(loc, 0) - location_deployed.get(loc, 0) - location_loaned.get(loc, 0),
                         'Deployed': location_deployed.get(loc, 0),
-                        'Available': location_counts.get(loc, 0) - location_deployed.get(loc, 0)
+                        'Loaned': location_loaned.get(loc, 0)
                     }
                     for loc in LOCATIONS
                 ])
-                st.bar_chart(df_locations.set_index('Location')[['Available', 'Deployed']])
+                st.bar_chart(df_locations.set_index('Location')[['Available', 'Deployed', 'Loaned']])
         
         with col2:
             st.write("**Location Summary:**")
             for loc in LOCATIONS:
                 total = location_counts.get(loc, 0)
                 deployed = location_deployed.get(loc, 0)
-                utilization = (deployed/total*100) if total > 0 else 0
+                loaned = location_loaned.get(loc, 0)
+                in_use = deployed + loaned
+                utilization = (in_use/total*100) if total > 0 else 0
                 st.write(f"**{loc}**: {total} assets ({utilization:.1f}% utilized)")
+                st.caption(f"  Available: {total - in_use}, Deployed: {deployed}, Loaned: {loaned}")
         
         st.divider()
         
@@ -565,29 +638,22 @@ with main_tab3:
                 st.info("No owner information available")
         
         with col2:
-            st.subheader("Recent Orders")
-            order_assets = {}
-            for asset in st.session_state.inventory:
-                order = asset.get('order_number', '')
-                if order:
-                    if order not in order_assets:
-                        order_assets[order] = []
-                    order_assets[order].append(asset)
+            st.subheader("Active Loans")
+            active_loans = [asset for asset in st.session_state.inventory if asset['status'] == "Loaned"]
             
-            if order_assets:
-                # Show recent 5 orders based on asset dates
-                recent_orders = sorted(
-                    order_assets.items(),
-                    key=lambda x: max(asset['date_added'] for asset in x[1]),
-                    reverse=True
-                )[:5]
+            if active_loans:
+                # Sort by loan date
+                active_loans.sort(key=lambda x: x.get('loan_info', {}).get('loan_date', ''), reverse=True)
                 
-                for order, assets in recent_orders:
-                    st.write(f"• **{order}**: {len(assets)} assets")
-                    latest_date = max(asset['date_added'] for asset in assets)
-                    st.caption(f"  Latest: {latest_date}")
+                for loan in active_loans[:10]:  # Show top 10 recent loans
+                    loan_info = loan.get('loan_info', {})
+                    asset_name = loan.get('name', 'Unnamed')
+                    st.write(f"• **{asset_name}** → {loan_info.get('loaned_to', 'Unknown')}")
+                    st.caption(f"  {loan['location']} | Since: {loan_info.get('loan_date', 'N/A')}")
+                    if loan_info.get('expected_return'):
+                        st.caption(f"  Expected return: {loan_info.get('expected_return')}")
             else:
-                st.info("No order information available")
+                st.info("No active loans")
         
         st.divider()
         
@@ -635,7 +701,8 @@ with main_tab3:
         for asset in recent_assets:
             asset_name = asset.get('name', 'Unnamed')
             serial_number = asset['specifications'].get('Serial Number', 'N/A')
-            st.write(f"• [{asset['location']}] {asset['category']} - {asset_name} (SN: {serial_number}) - Added: {asset['date_added']}")
+            status_emoji = "🟢" if asset['status'] == "Available" else "🔵" if asset['status'] == "Deployed" else "🟡"
+            st.write(f"{status_emoji} [{asset['location']}] {asset['category']} - {asset_name} (SN: {serial_number}) - Added: {asset['date_added']}")
     else:
         st.info("No data to display. Add some assets to see the dashboard!")
 
@@ -682,6 +749,13 @@ with main_tab4:
                         row['Row'] = asset['deployment_info']['row']
                         row['Position'] = asset['deployment_info']['position']
                         row['Deployment Date'] = asset['deployment_info']['deployment_date']
+                    # Add loan info if loaned
+                    elif asset['status'] == "Loaned":
+                        row['Loaned To'] = asset.get('loan_info', {}).get('loaned_to', '')
+                        row['Loan Purpose'] = asset.get('loan_info', {}).get('purpose', '')
+                        row['Loan Date'] = asset.get('loan_info', {}).get('loan_date', '')
+                        row['Expected Return'] = asset.get('loan_info', {}).get('expected_return', '')
+                    
                     export_data.append(row)
                 
                 df = pd.DataFrame(export_data)
@@ -766,7 +840,7 @@ with main_tab4:
 st.divider()
 col1, col2 = st.columns([4, 1])
 with col1:
-    st.caption("Multi-Location Lab Inventory Management System v2.0 | Auto-saves to inventory_data.json")
+    st.caption("Multi-Location Lab Inventory Management System v2.1 | Auto-saves to inventory_data.json")
 with col2:
     if st.session_state.inventory:
         if save_inventory():
