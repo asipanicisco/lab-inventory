@@ -1101,9 +1101,11 @@ with main_tab4:
             st.subheader("Top Deployment Racks (All Locations)")
             rack_counts = {}
             for asset in st.session_state.inventory:
-                if asset['status'] == "Deployed":
-                    rack_key = f"{asset['location']} - {asset['deployment_info']['rack']}"
-                    rack_counts[rack_key] = rack_counts.get(rack_key, 0) + 1
+                if asset['status'] == "Deployed" and asset.get('deployment_info'):
+                    rack = asset['deployment_info'].get('rack', '')
+                    if rack:  # Only count if rack is not empty
+                        rack_key = f"{asset['location']} - {rack}"
+                        rack_counts[rack_key] = rack_counts.get(rack_key, 0) + 1
             
             if rack_counts:
                 # Show top 10 racks
@@ -1111,7 +1113,7 @@ with main_tab4:
                 for rack, count in top_racks:
                     st.write(f"• {rack}: {count} assets")
             else:
-                st.info("No deployed assets yet")
+                st.info("No deployed assets with rack information yet")
         
         # Recent activity across all locations
         st.divider()
