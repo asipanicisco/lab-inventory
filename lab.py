@@ -4,14 +4,38 @@ import json
 from datetime import datetime
 import os
 
+# Helper functions - Define these first before using them
+import random
+import string
+
+def generate_asset_id():
+    """Generate unique asset ID with timestamp and random suffix"""
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    # Add microseconds and random string for uniqueness
+    microseconds = datetime.now().microsecond
+    random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    return f"AST-{timestamp}-{microseconds:06d}-{random_suffix}"
+
 # Initialize session state for data persistence
 if 'inventory' not in st.session_state:
     # Try to load existing data on startup
     if os.path.exists('inventory_data.json'):
         try:
             with open('inventory_data.json', 'r') as f:
-                st.session_state.inventory = json.load(f)
-        except:
+                data = f.read()
+                # Fix NaN values in JSON
+                data = data.replace('"asset_id": NaN', '"asset_id": null')
+                data = data.replace(': NaN', ': null')  # Fix any NaN values
+                inventory_data = json.loads(data)
+                # Fix null asset_ids and dates
+                for item in inventory_data:
+                    if item.get('asset_id') is None or str(item.get('asset_id')) == 'NaN' or str(item.get('asset_id')) == 'nan':
+                        item['asset_id'] = generate_asset_id()
+                    if item.get('date_added') is None or str(item.get('date_added')) == 'NaN' or str(item.get('date_added')) == 'nan':
+                        item['date_added'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                st.session_state.inventory = inventory_data
+        except Exception as e:
+            st.error(f"Error loading inventory: {e}")
             st.session_state.inventory = []
     else:
         st.session_state.inventory = []
@@ -87,16 +111,26 @@ st.markdown("""
 st.title("🔧 MS Perfect Lab Inventory Management System")
 st.markdown("Multi-location network equipment inventory with deployment tracking")
 
-# Helper functions
-def generate_asset_id():
-    """Generate unique asset ID"""
-    return f"AST-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
 def save_inventory():
     """Save inventory to JSON file"""
     try:
+        # Clean up any NaN values before saving
+        cleaned_inventory = []
+        for asset in st.session_state.inventory:
+            cleaned_asset = asset.copy()
+            # Fix asset_id if it's NaN
+            if cleaned_asset.get('asset_id') is None or str(cleaned_asset.get('asset_id')) in ['NaN', 'nan', 'null', '']:
+                cleaned_asset['asset_id'] = generate_asset_id()
+            # Fix date_added if it's NaN
+            if cleaned_asset.get('date_added') is None or str(cleaned_asset.get('date_added')) in ['NaN', 'nan', 'null', '']:
+                cleaned_asset['date_added'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            cleaned_inventory.append(cleaned_asset)
+        
         with open('inventory_data.json', 'w') as f:
-            json.dump(st.session_state.inventory, f, indent=2)
+            json.dump(cleaned_inventory, f, indent=2)
+        
+        # Update session state with cleaned data
+        st.session_state.inventory = cleaned_inventory
         return True
     except Exception as e:
         st.error(f"Error saving data: {e}")
@@ -105,8 +139,23 @@ def save_inventory():
 def load_inventory():
     """Load inventory from JSON file"""
     if os.path.exists('inventory_data.json'):
-        with open('inventory_data.json', 'r') as f:
-            return json.load(f)
+        try:
+            with open('inventory_data.json', 'r') as f:
+                data = f.read()
+                # Fix NaN values in JSON
+                data = data.replace('"asset_id": NaN', '"asset_id": null')
+                data = data.replace(': NaN', ': null')  # Fix any NaN values
+                inventory_data = json.loads(data)
+                # Fix null asset_ids and dates
+                for item in inventory_data:
+                    if item.get('asset_id') is None or str(item.get('asset_id')) in ['NaN', 'nan', 'null', '']:
+                        item['asset_id'] = generate_asset_id()
+                    if item.get('date_added') is None or str(item.get('date_added')) in ['NaN', 'nan', 'null', '']:
+                        item['date_added'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                return inventory_data
+        except Exception as e:
+            st.error(f"Error in load_inventory: {e}")
+            return []
     return []
 
 def get_asset_by_id(asset_id):
@@ -114,6 +163,18 @@ def get_asset_by_id(asset_id):
     for asset in st.session_state.inventory:
         if asset['asset_id'] == asset_id:
             return asset
+    return None
+
+def get_asset_by_serial(serial_number, category=None):
+    """Get asset by serial number, optionally filtered by category"""
+    if not serial_number:
+        return None
+    
+    for asset in st.session_state.inventory:
+        asset_serial = asset.get('specifications', {}).get('Serial Number', '')
+        if asset_serial and asset_serial.strip().upper() == serial_number.strip().upper():
+            if category is None or asset.get('category') == category:
+                return asset
     return None
 
 def update_asset(asset_id, updated_data):
@@ -780,8 +841,265 @@ with main_tab4:
                 st.dataframe(df.head())
                 
                 if st.button("Import Data"):
-                    # Import logic would go here
-                    st.success("Data imported successfully!")
+                    # Show column mapping helper
+                    st.info("📋 CSV Import Started...")
+                    
+                    # Display the columns found in the CSV
+                    st.write("**Columns found in your CSV:**")
+                    st.write(", ".join(df.columns.tolist()))
+                    
+                    # Import logic implementation
+                    imported_count = 0
+                    updated_count = 0
+                    skipped_count = 0
+                    duplicate_count = 0
+                    errors = []
+                    duplicates = []
+                    
+                    # Create a progress bar
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    total_rows = len(df)
+                    
+                    for index, row in df.iterrows():
+                        # Update progress
+                        progress = (index + 1) / total_rows
+                        progress_bar.progress(progress)
+                        status_text.text(f'Processing row {index + 1} of {total_rows}...')
+                        
+                        try:
+                            # Skip empty rows
+                            if row.isna().all():
+                                skipped_count += 1
+                                continue
+                            
+                            # Extract base fields - handle different possible column names
+                            csv_asset_id = None
+                            if 'Asset ID' in row and pd.notna(row['Asset ID']):
+                                csv_asset_id = str(row['Asset ID']).strip()
+                                if csv_asset_id in ['NaN', 'nan', '', 'None']:
+                                    csv_asset_id = None
+                            
+                            # Get name - this is critical
+                            name = ''
+                            if 'Name' in row and pd.notna(row['Name']):
+                                name = str(row['Name']).strip()
+                            
+                            # Skip if no name
+                            if not name:
+                                errors.append(f"Row {index + 2} (Excel row): No name provided - skipping")
+                                skipped_count += 1
+                                continue
+                            
+                            # Get other fields with defaults
+                            location = LOCATIONS[0]  # Default location
+                            if 'Location' in row and pd.notna(row['Location']):
+                                loc_value = str(row['Location']).strip().upper()
+                                if loc_value in LOCATIONS:
+                                    location = loc_value
+                                else:
+                                    errors.append(f"Row {index + 2}: Invalid location '{loc_value}', using default '{location}'")
+                            
+                            category = list(ASSET_CATEGORIES.keys())[0]  # Default category
+                            if 'Category' in row and pd.notna(row['Category']):
+                                cat_value = str(row['Category']).strip()
+                                if cat_value in ASSET_CATEGORIES:
+                                    category = cat_value
+                                else:
+                                    errors.append(f"Row {index + 2}: Invalid category '{cat_value}', using default '{category}'")
+                            
+                            status = 'Available'  # Default status
+                            if 'Status' in row and pd.notna(row['Status']):
+                                status_value = str(row['Status']).strip()
+                                if status_value in ['Available', 'Deployed', 'Loaned']:
+                                    status = status_value
+                            
+                            # Build specifications based on category
+                            specifications = {}
+                            serial_number = None
+                            
+                            if category in ASSET_CATEGORIES:
+                                # First check for required fields
+                                missing_required = []
+                                for field in ASSET_CATEGORIES[category]["required"]:
+                                    if field in row and pd.notna(row[field]):
+                                        field_value = str(row[field]).strip()
+                                        specifications[field] = field_value
+                                        if field == "Serial Number":
+                                            serial_number = field_value
+                                    else:
+                                        missing_required.append(field)
+                                
+                                # Warn about missing required fields but continue
+                                if missing_required:
+                                    errors.append(f"Row {index + 2}: Missing required fields for {category}: {', '.join(missing_required)}")
+                                
+                                # Add optional fields
+                                for field in ASSET_CATEGORIES[category]["optional"]:
+                                    if field in row and pd.notna(row[field]):
+                                        specifications[field] = str(row[field]).strip()
+                            
+                            # Determine what to do with this asset
+                            action = None
+                            existing_asset = None
+                            asset_id = None
+                            
+                            # First priority: Check by serial number
+                            if serial_number:
+                                existing_asset = get_asset_by_serial(serial_number, category)
+                                if existing_asset:
+                                    # Found by serial number
+                                    if csv_asset_id and csv_asset_id == existing_asset.get('asset_id'):
+                                        # Same ID and serial - this is an update
+                                        action = 'update'
+                                        asset_id = csv_asset_id
+                                    else:
+                                        # Different ID but same serial - this is a duplicate
+                                        action = 'duplicate'
+                                        duplicates.append({
+                                            'row': index + 2,
+                                            'name': name,
+                                            'serial': serial_number,
+                                            'category': category,
+                                            'existing_name': existing_asset.get('name', 'Unknown'),
+                                            'existing_location': existing_asset.get('location', 'Unknown'),
+                                            'existing_id': existing_asset.get('asset_id', 'Unknown')
+                                        })
+                                        duplicate_count += 1
+                                        continue
+                                else:
+                                    # Serial number not found - new asset
+                                    action = 'new'
+                                    asset_id = csv_asset_id if csv_asset_id else generate_asset_id()
+                            else:
+                                # No serial number - check by ID only
+                                if csv_asset_id:
+                                    existing_asset = get_asset_by_id(csv_asset_id)
+                                    if existing_asset:
+                                        action = 'update'
+                                        asset_id = csv_asset_id
+                                    else:
+                                        action = 'new'
+                                        asset_id = csv_asset_id
+                                else:
+                                    # No ID and no serial - definitely new
+                                    action = 'new'
+                                    asset_id = generate_asset_id()
+                            
+                            # Build deployment info if status is Deployed
+                            deployment_info = {}
+                            if status == "Deployed":
+                                deployment_info = {
+                                    "rack": str(row.get('Rack', '')).strip() if 'Rack' in row and pd.notna(row.get('Rack')) else '',
+                                    "row": str(row.get('Row', '')).strip() if 'Row' in row and pd.notna(row.get('Row')) else '',
+                                    "position": str(row.get('Position', '')).strip() if 'Position' in row and pd.notna(row.get('Position')) else '',
+                                    "deployment_date": str(row.get('Deployment Date', datetime.now().strftime("%Y-%m-%d %H:%M")))
+                                }
+                            
+                            # Build loan info if status is Loaned
+                            loan_info = {}
+                            if status == "Loaned":
+                                loan_info = {
+                                    "loaned_to": str(row.get('Loaned To', '')).strip() if 'Loaned To' in row and pd.notna(row.get('Loaned To')) else '',
+                                    "purpose": str(row.get('Loan Purpose', '')).strip() if 'Loan Purpose' in row and pd.notna(row.get('Loan Purpose')) else '',
+                                    "loan_date": str(row.get('Loan Date', datetime.now().strftime("%Y-%m-%d"))),
+                                    "expected_return": str(row.get('Expected Return', '')).strip() if 'Expected Return' in row and pd.notna(row.get('Expected Return')) else ''
+                                }
+                            
+                            # Build asset
+                            new_asset = {
+                                "asset_id": asset_id,
+                                "name": name,
+                                "network_name": str(row.get('Network Name', '')).strip() if 'Network Name' in row and pd.notna(row.get('Network Name')) else '',
+                                "location": location,
+                                "category": category,
+                                "status": status,
+                                "specifications": specifications,
+                                "deployment_info": deployment_info,
+                                "loan_info": loan_info,
+                                "notes": str(row.get('Notes', '')).strip() if 'Notes' in row and pd.notna(row.get('Notes')) else '',
+                                "date_added": str(row.get('Date Added', datetime.now().strftime("%Y-%m-%d %H:%M")))
+                            }
+                            
+                            # Add optional fields if present
+                            if 'Owner' in row and pd.notna(row['Owner']):
+                                new_asset["owner"] = str(row['Owner']).strip()
+                            if 'Order Number' in row and pd.notna(row['Order Number']):
+                                new_asset["order_number"] = str(row['Order Number']).strip()
+                            
+                            # Perform the action
+                            if action == 'update':
+                                # Update existing asset
+                                for i, asset in enumerate(st.session_state.inventory):
+                                    if asset['asset_id'] == asset_id:
+                                        st.session_state.inventory[i] = new_asset
+                                        updated_count += 1
+                                        break
+                            elif action == 'new':
+                                # Add new asset
+                                st.session_state.inventory.append(new_asset)
+                                imported_count += 1
+                            
+                        except Exception as e:
+                            errors.append(f"Row {index + 2} (Excel row): {str(e)}")
+                            import traceback
+                            errors.append(f"  Details: {traceback.format_exc()}")
+                    
+                    # Clear progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    # Save after import
+                    save_inventory()
+                    
+                    # Show detailed results
+                    st.write("---")
+                    st.write("**Import Summary:**")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        st.metric("Total Rows", total_rows)
+                    with col2:
+                        st.metric("Imported", imported_count)
+                    with col3:
+                        st.metric("Updated", updated_count) 
+                    with col4:
+                        st.metric("Skipped", skipped_count)
+                    with col5:
+                        st.metric("Duplicates", duplicate_count)
+                    
+                    # Show duplicate details if any
+                    if duplicates:
+                        st.error(f"⚠️ {duplicate_count} duplicate serial numbers found and skipped:")
+                        with st.expander("View Duplicate Details", expanded=True):
+                            for dup in duplicates:
+                                st.write(f"**Row {dup['row']}**: {dup['name']} (Serial: {dup['serial']})")
+                                st.caption(f"Already exists as: {dup['existing_name']} in {dup['existing_location']} (ID: {dup['existing_id']})")
+                    
+                    if imported_count > 0 or updated_count > 0:
+                        success_msg = []
+                        if imported_count > 0:
+                            success_msg.append(f"{imported_count} new assets imported")
+                        if updated_count > 0:
+                            success_msg.append(f"{updated_count} existing assets updated")
+                        st.success(f"✅ Success: {' and '.join(success_msg)}!")
+                        
+                        if errors:
+                            with st.expander(f"⚠️ Warnings/Errors ({len(errors)} issues)", expanded=False):
+                                for error in errors:
+                                    st.text(error)
+                        
+                        if st.button("Refresh Page"):
+                            st.rerun()
+                    else:
+                        st.error(f"❌ No assets were imported from {total_rows} rows.")
+                        if errors:
+                            st.warning("**Errors encountered:**")
+                            for error in errors[:10]:  # Show first 10 errors
+                                st.text(error)
+                            if len(errors) > 10:
+                                st.text(f"... and {len(errors) - 10} more errors")
+                        
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     
