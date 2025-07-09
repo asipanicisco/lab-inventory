@@ -76,18 +76,6 @@ ASSET_CATEGORIES = {
         "required": ["Model", "Serial Number", "MAC Address"],
         "optional": ["IOS Version"]
     },
-    "Cisco Network Module": {
-        "required": ["Model", "Part Number", "Serial Number", "Compatible With"],
-        "optional": []
-    },
-    "SFP": {
-        "required": ["Type", "Speed", "Wavelength", "Serial Number"],
-        "optional": []
-    },
-    "Stack Cable": {
-        "required": ["Length", "Type", "Part Number", "Serial Number"],
-        "optional": []
-    },
     "Lantronix Console": {
         "required": ["Model", "Serial Number", "IP Address", "Port Count"],
         "optional": []
@@ -359,10 +347,13 @@ def display_location_inventory(location):
                 with display_cols[2]:
                     if asset['status'] == "Deployed":
                         st.write("**Deployment Info:**")
-                        st.write(f"Rack: {asset['deployment_info']['rack']}")
-                        st.write(f"Row: {asset['deployment_info']['row']}")
-                        st.write(f"Position: {asset['deployment_info']['position']}")
-                        st.write(f"Deployed: {asset['deployment_info']['deployment_date']}")
+                        if asset.get('deployment_info'):
+                            st.write(f"Rack: {asset['deployment_info'].get('rack', 'N/A')}")
+                            st.write(f"Row: {asset['deployment_info'].get('row', 'N/A')}")
+                            st.write(f"Position: {asset['deployment_info'].get('position', 'N/A')}")
+                            st.write(f"Deployed: {asset['deployment_info'].get('deployment_date', 'N/A')}")
+                        else:
+                            st.write("No deployment details available")
                     elif asset['status'] == "Loaned":
                         st.write("**Loan Info:**")
                         loan_info = asset.get('loan_info', {})
